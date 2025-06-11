@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#grad)" stroke="#fff" stroke-width="4"/>
+
+  <!-- Brain shape -->
+  <path d="M45 35 C35 35, 30 45, 35 55 C30 65, 40 75, 50 70 C55 80, 70 80, 75 70 C85 75, 95 65, 90 55 C95 45, 90 35, 80 35 C75 30, 65 30, 60 35 C55 30, 50 30, 45 35 Z" 
+        fill="#fff" opacity="0.9"/>
+
+  <!-- Gear -->
+  <g transform="translate(75, 85) scale(0.8)">
+    <circle cx="0" cy="0" r="12" fill="#fff" opacity="0.9"/>
+    <circle cx="0" cy="0" r="6" fill="url(#grad)"/>
+    <!-- Gear teeth -->
+    <rect x="-2" y="-16" width="4" height="6" fill="#fff" opacity="0.9"/>
+    <rect x="-2" y="10" width="4" height="6" fill="#fff" opacity="0.9"/>
+    <rect x="-16" y="-2" width="6" height="4" fill="#fff" opacity="0.9"/>
+    <rect x="10" y="-2" width="6" height="4" fill="#fff" opacity="0.9"/>
+  </g>
+
+  <!-- AI text -->
+  <text x="64" y="105" text-anchor="middle" fill="#fff" font-family="Arial, sans-serif" font-size="14" font-weight="bold">AI</text>
+</svg>

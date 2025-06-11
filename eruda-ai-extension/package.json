@@ -1,0 +1,40 @@
+{
+  "name": "eruda-ai-assistant",
+  "version": "1.0.0",
+  "description": "Chrome extension integrating Eruda with an intelligent AI assistant for web development and debugging",
+  "main": "background.js",
+  "scripts": {
+    "build": "echo 'No build process needed for this extension'",
+    "test": "echo 'No tests specified'",
+    "lint": "eslint *.js",
+    "package": "zip -r eruda-ai-assistant.zip . -x '*.git*' 'node_modules/*' '*.zip'"
+  },
+  "keywords": [
+    "chrome-extension",
+    "eruda",
+    "ai-assistant",
+    "web-development",
+    "debugging",
+    "rag",
+    "developer-tools"
+  ],
+  "author": "OpenHands",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-repo/eruda-ai-assistant"
+  },
+  "bugs": {
+    "url": "https://github.com/your-repo/eruda-ai-assistant/issues"
+  },
+  "homepage": "https://github.com/your-repo/eruda-ai-assistant#readme",
+  "devDependencies": {
+    "eslint": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "browserslist": [
+    "last 2 Chrome versions"
+  ]
+}
