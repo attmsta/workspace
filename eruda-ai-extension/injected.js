@@ -9,6 +9,8 @@
       this.originalXHR = window.XMLHttpRequest;
       this.eventListeners = new Map();
       this.performanceEntries = [];
+      this.sendQueue = [];
+      this.sendTimeout = null;
       
       this.init();
     }
@@ -459,13 +461,35 @@
     }
 
     sendToExtension(type, data) {
-      // Send message to content script
-      window.postMessage({
+      // Queue the message for batched sending
+      this.sendQueue.push({
         source: 'eruda-ai-injected',
         type,
         data,
         timestamp: Date.now()
-      }, '*');
+      });
+
+      // Debounce sending to avoid overwhelming the content script
+      if (this.sendTimeout) {
+        clearTimeout(this.sendTimeout);
+      }
+
+      this.sendTimeout = setTimeout(() => {
+        this.flushSendQueue();
+      }, 100); // Send batched messages every 100ms
+    }
+
+    flushSendQueue() {
+      if (this.sendQueue.length === 0) return;
+
+      // Send all queued messages
+      this.sendQueue.forEach(message => {
+        window.postMessage(message, '*');
+      });
+
+      // Clear the queue
+      this.sendQueue = [];
+      this.sendTimeout = null;
     }
   }
 

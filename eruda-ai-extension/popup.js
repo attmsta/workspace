@@ -82,6 +82,21 @@ class PopupManager {
       this.testConnection();
     });
 
+    // API key visibility toggle
+    document.getElementById('toggle-api-key').addEventListener('click', () => {
+      this.toggleApiKeyVisibility();
+    });
+
+    // Advanced settings toggle
+    document.getElementById('toggle-advanced').addEventListener('click', () => {
+      this.toggleAdvancedSettings();
+    });
+
+    // Temperature slider
+    document.getElementById('temperature').addEventListener('input', (e) => {
+      document.getElementById('temperature-value').textContent = e.target.value;
+    });
+
     // Action buttons
     document.getElementById('clear-context').addEventListener('click', () => {
       this.clearContext();
@@ -150,15 +165,51 @@ class PopupManager {
         if (key === 'ragEnabled') {
           settings[key] = true; // Checkbox is checked if present in FormData
         } else if (key === 'maxContextChunks') {
-          settings[key] = parseInt(value, 10);
+          const chunks = parseInt(value, 10);
+          if (isNaN(chunks) || chunks < 1 || chunks > 50) {
+            throw new Error('Max context chunks must be between 1 and 50');
+          }
+          settings[key] = chunks;
         } else {
-          settings[key] = value;
+          settings[key] = value.trim();
         }
       }
 
       // Handle unchecked checkbox
       if (!formData.has('ragEnabled')) {
         settings.ragEnabled = false;
+      }
+
+      // Validate required fields
+      if (!settings.provider) {
+        throw new Error('Please select an AI provider');
+      }
+
+      if (!settings.apiKey) {
+        throw new Error('Please enter an API key');
+      }
+
+      // Validate API key format
+      if (settings.apiKey.length < 10) {
+        throw new Error('API key appears to be too short');
+      }
+
+      // Validate temperature range
+      if (settings.temperature !== undefined) {
+        const temp = parseFloat(settings.temperature);
+        if (isNaN(temp) || temp < 0 || temp > 1) {
+          throw new Error('Temperature must be between 0 and 1');
+        }
+        settings.temperature = temp;
+      }
+
+      // Validate max tokens
+      if (settings.maxTokens !== undefined) {
+        const tokens = parseInt(settings.maxTokens, 10);
+        if (isNaN(tokens) || tokens < 100 || tokens > 4000) {
+          throw new Error('Max tokens must be between 100 and 4000');
+        }
+        settings.maxTokens = tokens;
       }
 
       const response = await chrome.runtime.sendMessage({
@@ -238,13 +289,27 @@ class PopupManager {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       
       if (tab) {
-        // This would need to be implemented to get actual stats
-        // For now, showing placeholder values
-        document.getElementById('context-count').textContent = '0 chunks';
-        document.getElementById('total-context').textContent = '0 chunks';
+        // Get actual context stats
+        const response = await chrome.runtime.sendMessage({ 
+          type: 'GET_CONTEXT_STATS',
+          tabId: tab.id 
+        });
+        
+        if (response.success) {
+          const stats = response.data;
+          document.getElementById('context-count').textContent = 
+            `${stats.currentTab || 0} chunks`;
+          document.getElementById('total-context').textContent = 
+            `${stats.total || 0} chunks`;
+        } else {
+          throw new Error(response.error);
+        }
       }
     } catch (error) {
       console.error('Failed to update stats:', error);
+      // Show error state
+      document.getElementById('context-count').textContent = 'Error';
+      document.getElementById('total-context').textContent = 'Error';
     }
   }
 
@@ -318,21 +383,200 @@ class PopupManager {
   }
 
   openHelp() {
-    chrome.tabs.create({ 
-      url: 'https://github.com/your-repo/eruda-ai-assistant#help' 
-    });
+    // For now, show help in a modal or create a help page
+    this.showHelpModal();
   }
 
   openPrivacy() {
-    chrome.tabs.create({ 
-      url: 'https://github.com/your-repo/eruda-ai-assistant#privacy' 
-    });
+    this.showPrivacyModal();
   }
 
   openGitHub() {
     chrome.tabs.create({ 
-      url: 'https://github.com/your-repo/eruda-ai-assistant' 
+      url: 'https://github.com/attmsta/workspace' 
     });
+  }
+
+  showHelpModal() {
+    const helpContent = `
+      <h3>Eruda AI Assistant Help</h3>
+      <h4>Getting Started:</h4>
+      <ol>
+        <li>Configure your AI provider and API key</li>
+        <li>Visit any webpage</li>
+        <li>Open Eruda developer tools</li>
+        <li>Click the "AI Assistant" tab</li>
+        <li>Start asking questions about the page</li>
+      </ol>
+      
+      <h4>Example Questions:</h4>
+      <ul>
+        <li>"What JavaScript frameworks are used on this page?"</li>
+        <li>"Why is this form not submitting?"</li>
+        <li>"What network requests are failing?"</li>
+        <li>"How can I optimize this page's performance?"</li>
+      </ul>
+      
+      <h4>Features:</h4>
+      <ul>
+        <li>Real-time page analysis</li>
+        <li>Context-aware AI responses</li>
+        <li>Network request monitoring</li>
+        <li>Error detection and debugging</li>
+      </ul>
+    `;
+    
+    this.showModal('Help', helpContent);
+  }
+
+  showPrivacyModal() {
+    const privacyContent = `
+      <h3>Privacy Policy</h3>
+      <h4>Data Collection:</h4>
+      <ul>
+        <li>We do not collect or store personal data</li>
+        <li>API keys are stored locally in your browser</li>
+        <li>Page context is processed locally</li>
+        <li>Only AI API requests are sent externally</li>
+      </ul>
+      
+      <h4>Data Usage:</h4>
+      <ul>
+        <li>Page content is analyzed locally for context</li>
+        <li>Relevant context is sent to AI providers for responses</li>
+        <li>No data is shared with third parties</li>
+        <li>You can clear all stored data anytime</li>
+      </ul>
+      
+      <h4>Security:</h4>
+      <ul>
+        <li>All API communications use HTTPS</li>
+        <li>API keys are encrypted in browser storage</li>
+        <li>No external tracking or analytics</li>
+      </ul>
+    `;
+    
+    this.showModal('Privacy Policy', privacyContent);
+  }
+
+  showModal(title, content) {
+    // Create modal overlay
+    const modalHtml = `
+      <div class="modal-overlay" id="help-modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>${title}</h2>
+            <button class="modal-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            ${content}
+          </div>
+        </div>
+      </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    // Add modal styles
+    const modalStyles = `
+      <style id="modal-styles">
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.5);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10000;
+        }
+        .modal-content {
+          background: white;
+          border-radius: 8px;
+          max-width: 500px;
+          max-height: 80vh;
+          overflow-y: auto;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 20px;
+          border-bottom: 1px solid #e0e0e0;
+        }
+        .modal-header h2 {
+          margin: 0;
+          color: #333;
+        }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 24px;
+          cursor: pointer;
+          color: #666;
+        }
+        .modal-body {
+          padding: 20px;
+          line-height: 1.6;
+        }
+        .modal-body h3, .modal-body h4 {
+          color: #667eea;
+          margin-top: 20px;
+          margin-bottom: 10px;
+        }
+        .modal-body ul, .modal-body ol {
+          margin-left: 20px;
+        }
+        .modal-body li {
+          margin-bottom: 5px;
+        }
+      </style>
+    `;
+    
+    document.head.insertAdjacentHTML('beforeend', modalStyles);
+    
+    // Add close functionality
+    document.getElementById('help-modal').addEventListener('click', (e) => {
+      if (e.target.classList.contains('modal-overlay') || e.target.classList.contains('modal-close')) {
+        document.getElementById('help-modal').remove();
+        document.getElementById('modal-styles')?.remove();
+      }
+    });
+  }
+
+  toggleApiKeyVisibility() {
+    const apiKeyInput = document.getElementById('api-key');
+    const toggleButton = document.getElementById('toggle-api-key');
+    
+    if (apiKeyInput.type === 'password') {
+      apiKeyInput.type = 'text';
+      toggleButton.textContent = '🙈';
+      toggleButton.title = 'Hide API Key';
+    } else {
+      apiKeyInput.type = 'password';
+      toggleButton.textContent = '👁️';
+      toggleButton.title = 'Show API Key';
+    }
+  }
+
+  toggleAdvancedSettings() {
+    const advancedContent = document.getElementById('advanced-content');
+    const toggleButton = document.getElementById('toggle-advanced');
+    const toggleText = toggleButton.querySelector('.toggle-text');
+    const toggleIcon = toggleButton.querySelector('.toggle-icon');
+    
+    if (advancedContent.style.display === 'none') {
+      advancedContent.style.display = 'block';
+      toggleText.textContent = 'Hide Advanced Settings';
+      toggleButton.classList.add('active');
+    } else {
+      advancedContent.style.display = 'none';
+      toggleText.textContent = 'Show Advanced Settings';
+      toggleButton.classList.remove('active');
+    }
   }
 }
 

@@ -26,7 +26,10 @@
 
         <div class="form-group">
           <label for="api-key">API Key:</label>
-          <input type="password" id="api-key" name="apiKey" placeholder="Enter your API key">
+          <div class="input-with-toggle">
+            <input type="password" id="api-key" name="apiKey" placeholder="Enter your API key">
+            <button type="button" class="toggle-visibility" id="toggle-api-key" title="Show/Hide API Key">👁️</button>
+          </div>
           <small class="help-text">Your API key is stored locally and never shared</small>
         </div>
 
@@ -49,8 +52,48 @@
 
         <div class="form-group">
           <label for="max-context-chunks">Max Context Chunks:</label>
-          <input type="number" id="max-context-chunks" name="maxContextChunks" min="1" max="20" value="10">
+          <input type="number" id="max-context-chunks" name="maxContextChunks" min="1" max="50" value="10">
           <small class="help-text">Number of relevant context chunks to include in AI requests</small>
+        </div>
+
+        <div class="advanced-settings">
+          <button type="button" class="toggle-advanced" id="toggle-advanced">
+            <span class="toggle-text">Show Advanced Settings</span>
+            <span class="toggle-icon">▼</span>
+          </button>
+          
+          <div class="advanced-content" id="advanced-content" style="display: none;">
+            <div class="form-group">
+              <label for="temperature">AI Temperature:</label>
+              <input type="range" id="temperature" name="temperature" min="0" max="1" step="0.1" value="0.7">
+              <span class="range-value" id="temperature-value">0.7</span>
+              <small class="help-text">Controls randomness in AI responses (0 = deterministic, 1 = creative)</small>
+            </div>
+
+            <div class="form-group">
+              <label for="max-tokens">Max Response Tokens:</label>
+              <input type="number" id="max-tokens" name="maxTokens" min="100" max="4000" value="2000">
+              <small class="help-text">Maximum length of AI responses</small>
+            </div>
+
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="auto-context" name="autoContext" checked>
+                <span class="checkmark"></span>
+                Auto-capture page context
+              </label>
+              <small class="help-text">Automatically analyze page content for better responses</small>
+            </div>
+
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="debug-mode" name="debugMode">
+                <span class="checkmark"></span>
+                Debug mode
+              </label>
+              <small class="help-text">Enable detailed logging for troubleshooting</small>
+            </div>
+          </div>
         </div>
 
         <div class="form-actions">

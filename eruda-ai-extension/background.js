@@ -68,6 +68,26 @@ class BackgroundService {
           sendResponse({ success: true });
           break;
 
+        case 'CLEAR_CONTEXT':
+          await this.clearAllContext();
+          sendResponse({ success: true });
+          break;
+
+        case 'EXPORT_CONTEXT':
+          const contextData = await this.exportContext(sender.tab?.id);
+          sendResponse({ success: true, data: contextData });
+          break;
+
+        case 'GET_CONTEXT_STATS':
+          const stats = await this.getContextStats(sender.tab?.id);
+          sendResponse({ success: true, data: stats });
+          break;
+
+        case 'OPEN_SETTINGS':
+          chrome.runtime.openOptionsPage();
+          sendResponse({ success: true });
+          break;
+
         default:
           sendResponse({ success: false, error: 'Unknown message type' });
       }
@@ -117,7 +137,7 @@ class BackgroundService {
       throw new Error('API key not configured');
     }
 
-    const requestConfig = this.buildAIRequestConfig(provider, model, payload);
+    const requestConfig = await this.buildAIRequestConfig(provider, model, payload);
     
     const response = await fetch(requestConfig.url, {
       method: 'POST',
@@ -133,8 +153,8 @@ class BackgroundService {
     return this.parseAIResponse(provider, data);
   }
 
-  buildAIRequestConfig(provider, model, payload) {
-    const settings = this.getProviderSettings(provider);
+  async buildAIRequestConfig(provider, model, payload) {
+    const settings = await this.getSettings();
     
     switch (provider) {
       case 'openai':
@@ -147,8 +167,8 @@ class BackgroundService {
           body: {
             model: model || 'gpt-4',
             messages: payload.messages,
-            temperature: 0.7,
-            max_tokens: 2000
+            temperature: settings.temperature || 0.7,
+            max_tokens: settings.maxTokens || 2000
           }
         };
 
@@ -163,7 +183,7 @@ class BackgroundService {
           body: {
             model: model || 'claude-3-sonnet-20240229',
             messages: payload.messages,
-            max_tokens: 2000
+            max_tokens: settings.maxTokens || 2000
           }
         };
 
@@ -179,8 +199,8 @@ class BackgroundService {
           body: {
             model: model || 'anthropic/claude-3-sonnet',
             messages: payload.messages,
-            temperature: 0.7,
-            max_tokens: 2000
+            temperature: settings.temperature || 0.7,
+            max_tokens: settings.maxTokens || 2000
           }
         };
 
@@ -215,7 +235,11 @@ class BackgroundService {
       apiKey: '',
       model: '',
       ragEnabled: true,
-      maxContextChunks: 10
+      maxContextChunks: 10,
+      temperature: 0.7,
+      maxTokens: 2000,
+      autoContext: true,
+      debugMode: false
     });
     return result;
   }
@@ -259,6 +283,97 @@ class BackgroundService {
       for (const key of keysToRemove) {
         await chrome.storage.local.remove(key);
       }
+    }
+  }
+
+  async clearAllContext() {
+    try {
+      const allData = await chrome.storage.local.get();
+      const contextKeys = Object.keys(allData).filter(key => key.startsWith('context_'));
+      
+      if (contextKeys.length > 0) {
+        await chrome.storage.local.remove(contextKeys);
+        console.log(`Cleared ${contextKeys.length} context entries`);
+      }
+      
+      return { cleared: contextKeys.length };
+    } catch (error) {
+      console.error('Failed to clear context:', error);
+      throw error;
+    }
+  }
+
+  async exportContext(tabId = null) {
+    try {
+      const allData = await chrome.storage.local.get();
+      let contextKeys = Object.keys(allData).filter(key => key.startsWith('context_'));
+      
+      // Filter by tab if specified
+      if (tabId) {
+        contextKeys = contextKeys.filter(key => key.startsWith(`context_${tabId}_`));
+      }
+      
+      const contextData = {};
+      contextKeys.forEach(key => {
+        contextData[key] = allData[key];
+      });
+      
+      return {
+        exportDate: new Date().toISOString(),
+        tabId: tabId,
+        totalEntries: contextKeys.length,
+        data: contextData
+      };
+    } catch (error) {
+      console.error('Failed to export context:', error);
+      throw error;
+    }
+  }
+
+  async getContextStats(tabId = null) {
+    try {
+      const allData = await chrome.storage.local.get();
+      let contextKeys = Object.keys(allData).filter(key => key.startsWith('context_'));
+      
+      const stats = {
+        total: contextKeys.length,
+        byTab: {},
+        byType: {},
+        totalSize: 0
+      };
+      
+      contextKeys.forEach(key => {
+        const data = allData[key];
+        const keyParts = key.split('_');
+        const keyTabId = keyParts[1];
+        
+        // Count by tab
+        if (!stats.byTab[keyTabId]) {
+          stats.byTab[keyTabId] = 0;
+        }
+        stats.byTab[keyTabId]++;
+        
+        // Count by type
+        if (data && data.type) {
+          if (!stats.byType[data.type]) {
+            stats.byType[data.type] = 0;
+          }
+          stats.byType[data.type]++;
+        }
+        
+        // Estimate size
+        stats.totalSize += JSON.stringify(data).length;
+      });
+      
+      // Filter for current tab if specified
+      if (tabId) {
+        stats.currentTab = stats.byTab[tabId] || 0;
+      }
+      
+      return stats;
+    } catch (error) {
+      console.error('Failed to get context stats:', error);
+      throw error;
     }
   }
 }

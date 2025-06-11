@@ -33,7 +33,10 @@
         "eruda.js",
         "injected.js",
         "rag-worker.js",
-        "vector-store.js"
+        "vector-store.js",
+        "context-manager.js",
+        "onboarding.js",
+        "performance-analytics.js"
       ],
       "matches": ["<all_urls>"]
     }
