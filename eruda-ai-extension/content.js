@@ -53,9 +53,9 @@ class ErudaAIContent {
         return;
       }
 
-      // Load Eruda from CDN
+      // Load Eruda from local file
       const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/eruda@3.0.1/eruda.js';
+      script.src = chrome.runtime.getURL('eruda.js');
       script.onload = () => {
         window.eruda.init();
         this.isErudaLoaded = true;
