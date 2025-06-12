@@ -410,3 +410,72 @@ input[type="range"] {
 .popup-content::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
 }
+
+/* Model info styles */
+.model-info {
+  margin-top: 8px;
+}
+
+.model-info-card {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+}
+
+.model-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.model-name {
+  font-weight: 600;
+  color: #333;
+}
+
+.model-cost {
+  font-size: 14px;
+}
+
+.model-description {
+  color: #666;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.model-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-detail {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.detail-label {
+  color: #666;
+  font-weight: 500;
+}
+
+.detail-value {
+  color: #333;
+  font-weight: 600;
+}
+
+/* Enhanced select styles for model options */
+select optgroup {
+  font-weight: bold;
+  color: #333;
+  background: #f8f9fa;
+}
+
+select option {
+  padding: 4px 8px;
+  font-size: 13px;
+}

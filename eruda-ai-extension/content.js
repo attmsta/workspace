@@ -9,6 +9,7 @@ class ErudaAIContent {
     this.contextVisualization = null;
     this.onboardingSystem = null;
     this.performanceAnalytics = null;
+    this.advancedAIFeatures = null;
     this.init();
   }
 
@@ -116,18 +117,37 @@ class ErudaAIContent {
     performanceScript.src = chrome.runtime.getURL('performance-analytics.js');
     document.head.appendChild(performanceScript);
 
+    // Load advanced AI features
+    const aiFeatureScript = document.createElement('script');
+    aiFeatureScript.src = chrome.runtime.getURL('ai-features.js');
+    document.head.appendChild(aiFeatureScript);
+
+    // Load model selector
+    const modelSelectorScript = document.createElement('script');
+    modelSelectorScript.src = chrome.runtime.getURL('model-selector.js');
+    document.head.appendChild(modelSelectorScript);
+
+    // Load cybersecurity AI
+    const cybersecurityScript = document.createElement('script');
+    cybersecurityScript.src = chrome.runtime.getURL('cybersecurity-ai.js');
+    document.head.appendChild(cybersecurityScript);
+
     // Wait for scripts to load
     await Promise.all([
       new Promise(resolve => { ragScript.onload = resolve; }),
       new Promise(resolve => { contextScript.onload = resolve; }),
       new Promise(resolve => { onboardingScript.onload = resolve; }),
-      new Promise(resolve => { performanceScript.onload = resolve; })
+      new Promise(resolve => { performanceScript.onload = resolve; }),
+      new Promise(resolve => { aiFeatureScript.onload = resolve; }),
+      new Promise(resolve => { modelSelectorScript.onload = resolve; }),
+      new Promise(resolve => { cybersecurityScript.onload = resolve; })
     ]);
 
     this.ragSystem = new window.VectorStore();
     this.contextManager = new window.ContextManager();
     this.onboardingSystem = new window.OnboardingSystem();
     this.performanceAnalytics = new window.PerformanceAnalytics();
+    this.advancedAIFeatures = new window.AdvancedAIFeatures();
     
     // Connect the systems
     this.ragSystem.setContextManager(this.contextManager);
@@ -137,6 +157,7 @@ class ErudaAIContent {
     // Make systems globally accessible
     window.onboardingSystem = this.onboardingSystem;
     window.performanceAnalytics = this.performanceAnalytics;
+    window.advancedAIFeatures = this.advancedAIFeatures;
   }
 
   setupPageMonitoring() {
@@ -447,11 +468,8 @@ class ErudaAIContent {
             <div class="message-content">
               Hello! I'm your AI assistant for web development and debugging. 
               I can help you analyze this page's code, debug issues, and answer questions about the current state.
-              <div class="quick-actions">
-                <button class="quick-action" data-query="What JavaScript frameworks are used on this page?">🔍 Detect Frameworks</button>
-                <button class="quick-action" data-query="Are there any JavaScript errors on this page?">🐛 Check Errors</button>
-                <button class="quick-action" data-query="How can I optimize this page's performance?">⚡ Performance Tips</button>
-                <button class="quick-action" data-query="What network requests are being made?">🌐 Network Analysis</button>
+              <div class="quick-actions" id="quick-actions">
+                <!-- Quick actions will be dynamically generated -->
               </div>
             </div>
           </div>
@@ -486,6 +504,7 @@ class ErudaAIContent {
     this.setupAIEventListeners($container);
     this.loadAIStyles();
     this.updateContextCount();
+    this.generateSmartQuickActions();
     
     // Check if this is the first time using the extension
     this.checkFirstTimeUser();
@@ -1752,6 +1771,332 @@ ${contextSummary}`;
     setTimeout(() => this.showPerformanceDashboard(), 100);
   }
 
+  async generateSmartQuickActions() {
+    const quickActionsContainer = document.getElementById('quick-actions');
+    if (!quickActionsContainer) return;
+
+    let actions = [];
+
+    // Get context-based suggestions if available
+    if (this.advancedAIFeatures && this.currentContext) {
+      try {
+        const suggestions = await this.advancedAIFeatures.generateSuggestions(this.currentContext);
+        actions = suggestions.slice(0, 4); // Limit to 4 suggestions
+      } catch (error) {
+        console.warn('Could not generate smart suggestions:', error);
+      }
+    }
+
+    // Fallback to default actions if no smart suggestions
+    if (actions.length === 0) {
+      actions = [
+        {
+          type: 'debug',
+          title: '🐛 Debug Issues',
+          description: 'Find and fix JavaScript errors',
+          action: 'debug',
+          priority: 'medium'
+        },
+        {
+          type: 'performance',
+          title: '⚡ Performance',
+          description: 'Analyze page performance',
+          action: 'performance',
+          priority: 'medium'
+        },
+        {
+          type: 'security',
+          title: '🔒 Security Scan',
+          description: 'Comprehensive cybersecurity analysis',
+          action: 'cybersecurity-scan',
+          priority: 'high'
+        },
+        {
+          type: 'malware',
+          title: '🦠 Malware Check',
+          description: 'Detect malicious code and threats',
+          action: 'malware-detection',
+          priority: 'high'
+        },
+        {
+          type: 'privacy',
+          title: '🔐 Privacy Audit',
+          description: 'GDPR/CCPA compliance check',
+          action: 'privacy-compliance',
+          priority: 'medium'
+        },
+        {
+          type: 'pentest',
+          title: '🎯 Pentest Plan',
+          description: 'Generate penetration testing strategy',
+          action: 'pentest-planning',
+          priority: 'medium'
+        }
+      ];
+    }
+
+    // Generate HTML for quick actions
+    const actionsHtml = actions.map(action => `
+      <button class="quick-action" data-template="${action.action}" data-type="${action.type}" title="${action.description}">
+        ${action.title}
+      </button>
+    `).join('');
+
+    quickActionsContainer.innerHTML = actionsHtml;
+
+    // Add event listeners for quick actions
+    quickActionsContainer.querySelectorAll('.quick-action').forEach(button => {
+      button.addEventListener('click', (e) => {
+        const template = e.target.dataset.template;
+        const type = e.target.dataset.type;
+        this.executeQuickAction(template, type);
+      });
+    });
+  }
+
+  async executeQuickAction(templateId, type) {
+    // Handle cybersecurity-specific actions
+    if (templateId.includes('cybersecurity') || templateId.includes('malware') || 
+        templateId.includes('privacy') || templateId.includes('pentest')) {
+      await this.executeCybersecurityAction(templateId, type);
+      return;
+    }
+
+    if (!this.advancedAIFeatures) {
+      // Fallback to simple queries
+      const queries = {
+        debug: 'Are there any JavaScript errors on this page? Please analyze and provide solutions.',
+        performance: 'How can I optimize this page\'s performance? Please analyze load times and suggest improvements.',
+        accessibility: 'Please check this page for accessibility issues and suggest improvements.',
+        security: 'Please review this page for security vulnerabilities and provide recommendations.'
+      };
+
+      const query = queries[templateId] || queries.debug;
+      $('#ai-chat-input').val(query);
+      this.sendMessage();
+      return;
+    }
+
+    try {
+      // Get the prompt template
+      const template = this.advancedAIFeatures.getPromptTemplate(templateId);
+      if (!template) {
+        throw new Error(`Template ${templateId} not found`);
+      }
+
+      // Prepare context variables
+      const variables = {
+        context: this.currentContext ? JSON.stringify(this.currentContext, null, 2) : 'No context available',
+        userInput: `Please perform a ${type} analysis of this page`,
+        performanceData: this.performanceAnalytics ? 
+          JSON.stringify(await this.performanceAnalytics.getAnalytics(), null, 2) : 
+          'No performance data available'
+      };
+
+      // Process the template
+      const processedPrompt = this.advancedAIFeatures.processTemplate(templateId, variables);
+
+      // Set the processed prompt in the input and send
+      $('#ai-chat-input').val(processedPrompt);
+      this.sendMessage();
+
+    } catch (error) {
+      console.error('Failed to execute quick action:', error);
+      this.showNotification('Failed to execute quick action', 'error');
+    }
+  }
+
+  async executeCybersecurityAction(templateId, type) {
+    try {
+      // Show loading indicator
+      this.showNotification('Running cybersecurity analysis...', 'info');
+
+      // Get current context
+      const context = this.currentContext || await this.captureContext();
+
+      let result;
+      let analysisType;
+
+      // Execute the appropriate cybersecurity analysis
+      switch (templateId) {
+        case 'cybersecurity-scan':
+          if (window.SpecializedAITools) {
+            const tools = new window.SpecializedAITools();
+            result = await tools.runTool('security-analyzer', 'runCybersecurityScan', context);
+            analysisType = 'Comprehensive Security Scan';
+          }
+          break;
+
+        case 'malware-detection':
+          if (window.SpecializedAITools) {
+            const tools = new window.SpecializedAITools();
+            result = await tools.runTool('security-analyzer', 'detectMalware', context);
+            analysisType = 'Malware Detection';
+          }
+          break;
+
+        case 'privacy-compliance':
+          if (window.SpecializedAITools) {
+            const tools = new window.SpecializedAITools();
+            result = await tools.runTool('security-analyzer', 'auditPrivacyCompliance', context);
+            analysisType = 'Privacy Compliance Audit';
+          }
+          break;
+
+        case 'pentest-planning':
+          if (window.SpecializedAITools) {
+            const tools = new window.SpecializedAITools();
+            result = await tools.runTool('security-analyzer', 'generatePentestPlan', context);
+            analysisType = 'Penetration Testing Plan';
+          }
+          break;
+
+        default:
+          throw new Error(`Unknown cybersecurity action: ${templateId}`);
+      }
+
+      if (result) {
+        // Format and display the results
+        const formattedResult = this.formatCybersecurityResult(result, analysisType);
+        this.displayCybersecurityResults(formattedResult, analysisType);
+      } else {
+        throw new Error('No result from cybersecurity analysis');
+      }
+
+    } catch (error) {
+      console.error('Cybersecurity action failed:', error);
+      this.showNotification(`Cybersecurity analysis failed: ${error.message}`, 'error');
+      
+      // Fallback to AI chat with security prompt
+      const fallbackPrompt = this.getCybersecurityFallbackPrompt(templateId, type);
+      $('#ai-chat-input').val(fallbackPrompt);
+      this.sendMessage();
+    }
+  }
+
+  formatCybersecurityResult(result, analysisType) {
+    let formatted = `## ${analysisType} Results\n\n`;
+
+    // Add status
+    formatted += `**Status:** ${result.status}\n\n`;
+
+    // Add risk score if available
+    if (result.overallRiskScore !== undefined) {
+      const riskLevel = result.overallRiskScore > 70 ? 'HIGH' : 
+                       result.overallRiskScore > 40 ? 'MEDIUM' : 'LOW';
+      formatted += `**Risk Score:** ${result.overallRiskScore}/100 (${riskLevel})\n\n`;
+    }
+
+    // Add critical issues
+    if (result.criticalIssues && result.criticalIssues.length > 0) {
+      formatted += `### 🚨 Critical Issues (${result.criticalIssues.length})\n`;
+      result.criticalIssues.forEach((issue, index) => {
+        formatted += `${index + 1}. **${issue.name}**: ${issue.description}\n`;
+      });
+      formatted += '\n';
+    }
+
+    // Add vulnerabilities
+    if (result.vulnerabilities && result.vulnerabilities.length > 0) {
+      formatted += `### 🛡️ Vulnerabilities Found (${result.vulnerabilities.length})\n`;
+      result.vulnerabilities.forEach((vuln, index) => {
+        formatted += `${index + 1}. **${vuln.name}** (${vuln.severity})\n`;
+        formatted += `   - ${vuln.description}\n`;
+      });
+      formatted += '\n';
+    }
+
+    // Add malware findings
+    if (result.malwareFindings && result.malwareFindings.length > 0) {
+      formatted += `### 🦠 Malware Detected (${result.malwareFindings.length})\n`;
+      result.malwareFindings.forEach((finding, index) => {
+        formatted += `${index + 1}. **${finding.type}** (${finding.severity})\n`;
+        formatted += `   - ${finding.description}\n`;
+      });
+      formatted += '\n';
+    }
+
+    // Add privacy compliance issues
+    if (result.gdprCompliance && result.gdprCompliance.issues) {
+      formatted += `### 🔐 Privacy Compliance Issues (${result.gdprCompliance.issues.length})\n`;
+      result.gdprCompliance.issues.forEach((issue, index) => {
+        formatted += `${index + 1}. **${issue.type}** (${issue.severity})\n`;
+        formatted += `   - ${issue.description}\n`;
+      });
+      formatted += '\n';
+    }
+
+    // Add test cases for pentest planning
+    if (result.testCases && result.testCases.length > 0) {
+      formatted += `### 🎯 Recommended Test Cases\n`;
+      result.testCases.forEach((category, index) => {
+        formatted += `**${category.category}** (Priority: ${category.priority})\n`;
+        category.tests.forEach(test => {
+          formatted += `- ${test}\n`;
+        });
+        formatted += '\n';
+      });
+    }
+
+    // Add recommendations
+    if (result.recommendations && result.recommendations.length > 0) {
+      formatted += `### 💡 Recommendations\n`;
+      result.recommendations.forEach((rec, index) => {
+        formatted += `${index + 1}. ${rec}\n`;
+      });
+      formatted += '\n';
+    }
+
+    return formatted;
+  }
+
+  displayCybersecurityResults(formattedResult, analysisType) {
+    // Add the results as an AI message in the chat
+    const $chatMessages = $('#ai-chat-messages');
+    const messageHtml = `
+      <div class="message ai-message">
+        <div class="message-header">
+          <span class="message-sender">🔒 Cybersecurity AI</span>
+          <span class="message-time">${new Date().toLocaleTimeString()}</span>
+        </div>
+        <div class="message-content">
+          <div class="cybersecurity-results">
+            ${this.markdownToHtml(formattedResult)}
+          </div>
+        </div>
+      </div>
+    `;
+
+    $chatMessages.append(messageHtml);
+    $chatMessages.scrollTop($chatMessages[0].scrollHeight);
+
+    // Show success notification
+    this.showNotification(`${analysisType} completed successfully`, 'success');
+  }
+
+  getCybersecurityFallbackPrompt(templateId, type) {
+    const prompts = {
+      'cybersecurity-scan': 'Please perform a comprehensive cybersecurity analysis of this webpage. Check for OWASP Top 10 vulnerabilities, malware, network security issues, and privacy compliance. Provide detailed findings and recommendations.',
+      'malware-detection': 'Please scan this webpage for malicious code, cryptojacking scripts, phishing attempts, and data exfiltration patterns. Analyze JavaScript behavior and identify potential threats.',
+      'privacy-compliance': 'Please audit this webpage for GDPR and CCPA compliance. Check cookie usage, data collection practices, consent mechanisms, and privacy policy compliance. Provide improvement recommendations.',
+      'pentest-planning': 'Please generate a penetration testing plan for this webpage. Identify attack vectors, suggest test cases, analyze security controls, and provide a prioritized testing strategy.'
+    };
+
+    return prompts[templateId] || 'Please perform a security analysis of this webpage and provide recommendations.';
+  }
+
+  markdownToHtml(markdown) {
+    // Simple markdown to HTML conversion
+    return markdown
+      .replace(/### (.*)/g, '<h3>$1</h3>')
+      .replace(/## (.*)/g, '<h2>$1</h2>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/\n/g, '<br>')
+      .replace(/- (.*?)(<br>|$)/g, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>)/g, '<ul>$1</ul>');
+  }
+
   showSettings() {
     // This would open the extension popup or a modal
     chrome.runtime.sendMessage({ type: 'OPEN_SETTINGS' });
@@ -1947,6 +2292,78 @@ ${contextSummary}`;
           background: #bbdefb;
           border-color: #64b5f6;
           transform: translateY(-1px);
+        }
+
+        .cybersecurity-results {
+          background: #f8f9fa;
+          border: 1px solid #dee2e6;
+          border-radius: 6px;
+          padding: 15px;
+          margin: 10px 0;
+        }
+
+        .cybersecurity-results h2 {
+          color: #dc3545;
+          margin: 0 0 10px 0;
+          font-size: 16px;
+          font-weight: bold;
+        }
+
+        .cybersecurity-results h3 {
+          color: #495057;
+          margin: 15px 0 8px 0;
+          font-size: 14px;
+          font-weight: bold;
+        }
+
+        .cybersecurity-results strong {
+          color: #212529;
+          font-weight: 600;
+        }
+
+        .cybersecurity-results ul {
+          margin: 8px 0;
+          padding-left: 20px;
+        }
+
+        .cybersecurity-results li {
+          margin: 4px 0;
+          color: #495057;
+        }
+
+        .quick-action[data-type="security"],
+        .quick-action[data-type="malware"] {
+          background: linear-gradient(135deg, #dc3545, #c82333);
+          color: white;
+          border: none;
+        }
+
+        .quick-action[data-type="security"]:hover,
+        .quick-action[data-type="malware"]:hover {
+          background: linear-gradient(135deg, #c82333, #bd2130);
+          transform: translateY(-2px);
+        }
+
+        .quick-action[data-type="privacy"] {
+          background: linear-gradient(135deg, #6f42c1, #5a32a3);
+          color: white;
+          border: none;
+        }
+
+        .quick-action[data-type="privacy"]:hover {
+          background: linear-gradient(135deg, #5a32a3, #4e2a8e);
+          transform: translateY(-2px);
+        }
+
+        .quick-action[data-type="pentest"] {
+          background: linear-gradient(135deg, #fd7e14, #e8690b);
+          color: white;
+          border: none;
+        }
+
+        .quick-action[data-type="pentest"]:hover {
+          background: linear-gradient(135deg, #e8690b, #d35400);
+          transform: translateY(-2px);
         }
         
         #ai-chat-input {

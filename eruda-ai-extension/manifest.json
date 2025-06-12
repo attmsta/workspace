@@ -36,7 +36,11 @@
         "vector-store.js",
         "context-manager.js",
         "onboarding.js",
-        "performance-analytics.js"
+        "performance-analytics.js",
+        "ai-features.js",
+        "model-selector.js",
+        "ai-tools.js",
+        "cybersecurity-ai.js"
       ],
       "matches": ["<all_urls>"]
     }

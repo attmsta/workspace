@@ -2,35 +2,35 @@
 class PopupManager {
   constructor() {
     this.settings = {};
-    this.modelOptions = {
-      openai: [
-        { value: 'gpt-4', label: 'GPT-4' },
-        { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-        { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' }
-      ],
-      anthropic: [
-        { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
-        { value: 'claude-3-sonnet-20240229', label: 'Claude 3 Sonnet' },
-        { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku' }
-      ],
-      openrouter: [
-        { value: 'anthropic/claude-3-opus', label: 'Claude 3 Opus' },
-        { value: 'anthropic/claude-3-sonnet', label: 'Claude 3 Sonnet' },
-        { value: 'openai/gpt-4', label: 'GPT-4' },
-        { value: 'openai/gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-        { value: 'meta-llama/llama-2-70b-chat', label: 'Llama 2 70B' }
-      ]
-    };
-    
+    this.modelSelector = null;
     this.init();
   }
 
   async init() {
+    // Initialize model selector
+    await this.initializeModelSelector();
     await this.loadSettings();
     this.setupEventListeners();
     this.updateModelOptions();
     this.updateStatus();
     this.updateStats();
+  }
+
+  async initializeModelSelector() {
+    // Load model selector script
+    if (!window.ModelSelector) {
+      const script = document.createElement('script');
+      script.src = '../model-selector.js';
+      document.head.appendChild(script);
+      
+      // Wait for script to load
+      await new Promise(resolve => {
+        script.onload = resolve;
+      });
+    }
+    
+    this.modelSelector = new window.ModelSelector();
+    await this.modelSelector.loadActiveModel();
   }
 
   async loadSettings() {
@@ -75,6 +75,11 @@ class PopupManager {
     // Provider change
     document.getElementById('provider').addEventListener('change', () => {
       this.updateModelOptions();
+    });
+
+    // Model change
+    document.getElementById('model').addEventListener('change', (e) => {
+      this.onModelChange(e.target.value);
     });
 
     // Test connection
@@ -133,26 +138,128 @@ class PopupManager {
   }
 
   updateModelOptions() {
+    if (!this.modelSelector) return;
+
     const provider = document.getElementById('provider').value;
     const modelSelect = document.getElementById('model');
     
     // Clear existing options
-    modelSelect.innerHTML = '<option value="">Default</option>';
+    modelSelect.innerHTML = '';
     
-    // Add provider-specific options
-    if (this.modelOptions[provider]) {
-      this.modelOptions[provider].forEach(option => {
-        const optionElement = document.createElement('option');
-        optionElement.value = option.value;
-        optionElement.textContent = option.label;
-        modelSelect.appendChild(optionElement);
+    // Add recommended models section
+    const recommendedGroup = document.createElement('optgroup');
+    recommendedGroup.label = '🌟 Recommended';
+    
+    const recommendedModels = this.modelSelector.getRecommendedModels()
+      .filter(model => !provider || model.provider === provider);
+    
+    recommendedModels.forEach(model => {
+      const option = this.createModelOption(model);
+      recommendedGroup.appendChild(option);
+    });
+    
+    if (recommendedModels.length > 0) {
+      modelSelect.appendChild(recommendedGroup);
+    }
+
+    // Add provider-specific models
+    if (provider) {
+      const providerModels = this.modelSelector.getModelsByProvider(provider)
+        .filter(model => !model.recommended); // Exclude already shown recommended models
+      
+      if (providerModels.length > 0) {
+        const providerGroup = document.createElement('optgroup');
+        const providerInfo = this.modelSelector.getProvider(provider);
+        providerGroup.label = `${providerInfo?.icon || '🤖'} ${providerInfo?.name || provider}`;
+        
+        providerModels.forEach(model => {
+          const option = this.createModelOption(model);
+          providerGroup.appendChild(option);
+        });
+        
+        modelSelect.appendChild(providerGroup);
+      }
+    } else {
+      // Show all models grouped by provider
+      const providers = this.modelSelector.getProviders();
+      
+      providers.forEach(provider => {
+        const providerModels = this.modelSelector.getModelsByProvider(provider.id)
+          .filter(model => !model.recommended); // Exclude already shown recommended models
+        
+        if (providerModels.length > 0) {
+          const providerGroup = document.createElement('optgroup');
+          providerGroup.label = `${provider.icon} ${provider.name}`;
+          
+          providerModels.forEach(model => {
+            const option = this.createModelOption(model);
+            providerGroup.appendChild(option);
+          });
+          
+          modelSelect.appendChild(providerGroup);
+        }
       });
     }
 
-    // Restore selected value if it exists
-    if (this.settings.model) {
-      modelSelect.value = this.settings.model;
+    // Restore selected value
+    const activeModel = this.modelSelector.getActiveModel();
+    if (activeModel) {
+      modelSelect.value = activeModel.id;
     }
+  }
+
+  createModelOption(model) {
+    const option = document.createElement('option');
+    option.value = model.id;
+    
+    const displayInfo = this.modelSelector.getModelDisplayInfo(model.id);
+    option.textContent = `${displayInfo.displayName} ${displayInfo.costDisplay}`;
+    option.title = `${model.description}\nCapabilities: ${displayInfo.capabilityIcons}\nContext: ${model.contextWindow.toLocaleString()} tokens`;
+    
+    return option;
+  }
+
+  async onModelChange(modelId) {
+    if (this.modelSelector && modelId) {
+      await this.modelSelector.setActiveModel(modelId);
+      this.updateModelInfo(modelId);
+    }
+  }
+
+  updateModelInfo(modelId) {
+    const modelInfoDiv = document.getElementById('model-info');
+    if (!modelInfoDiv || !this.modelSelector) return;
+
+    const model = this.modelSelector.getModel(modelId);
+    if (!model) {
+      modelInfoDiv.innerHTML = '';
+      return;
+    }
+
+    const displayInfo = this.modelSelector.getModelDisplayInfo(modelId);
+    modelInfoDiv.innerHTML = `
+      <div class="model-info-card">
+        <div class="model-header">
+          <span class="model-name">${displayInfo.displayName}</span>
+          <span class="model-cost">${displayInfo.costDisplay}</span>
+        </div>
+        <div class="model-description">${model.description}</div>
+        <div class="model-details">
+          <div class="model-detail">
+            <span class="detail-label">Context Window:</span>
+            <span class="detail-value">${model.contextWindow.toLocaleString()} tokens</span>
+          </div>
+          <div class="model-detail">
+            <span class="detail-label">Max Output:</span>
+            <span class="detail-value">${model.maxTokens.toLocaleString()} tokens</span>
+          </div>
+          <div class="model-detail">
+            <span class="detail-label">Capabilities:</span>
+            <span class="detail-value">${displayInfo.capabilityIcons}</span>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   async saveSettings() {
