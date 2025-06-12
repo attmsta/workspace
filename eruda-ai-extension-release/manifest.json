@@ -31,6 +31,7 @@
     {
       "resources": [
         "eruda.js",
+        "eruda.min.js",
         "injected.js",
         "rag-worker.js",
         "vector-store.js",
@@ -40,7 +41,8 @@
         "ai-features.js",
         "model-selector.js",
         "ai-tools.js",
-        "cybersecurity-ai.js"
+        "cybersecurity-ai.js",
+        "eruda-floating-button.js"
       ],
       "matches": ["<all_urls>"]
     }

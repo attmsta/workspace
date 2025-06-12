@@ -462,12 +462,44 @@ class PopupManager {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       
       if (tab) {
-        await chrome.tabs.sendMessage(tab.id, { type: 'OPEN_ERUDA_PANEL' });
-        window.close(); // Close popup
+        try {
+          await chrome.tabs.sendMessage(tab.id, { type: 'OPEN_ERUDA_PANEL' });
+          this.showNotification('Eruda panel opened successfully', 'success');
+          window.close(); // Close popup
+        } catch (connectionError) {
+          // If content script connection fails, try to inject and retry
+          console.log('Content script not responding, attempting to inject...');
+          
+          try {
+            // Inject content script
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ['content.js']
+            });
+            
+            // Wait a moment for initialization
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Retry the message
+            await chrome.tabs.sendMessage(tab.id, { type: 'OPEN_ERUDA_PANEL' });
+            this.showNotification('Eruda panel opened (after injection)', 'success');
+            window.close();
+          } catch (injectionError) {
+            // Final fallback: show instructions for floating button
+            this.showNotification(
+              'Extension connection failed. Look for the floating 🔧 button on the page to open Eruda directly.',
+              'warning'
+            );
+            console.error('Failed to inject content script:', injectionError);
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to open Eruda panel:', error);
-      this.showNotification('Failed to open Eruda panel', 'error');
+      this.showNotification(
+        'Failed to open Eruda panel. Try using the floating 🔧 button on the page.',
+        'error'
+      );
     }
   }
 

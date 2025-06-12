@@ -24,6 +24,9 @@ class ErudaAIContent {
 
   async setup() {
     try {
+      // Initialize floating Eruda button first (independent of Eruda loading)
+      await this.initializeFloatingButton();
+      
       // Load Eruda
       await this.loadEruda();
       
@@ -36,12 +39,80 @@ class ErudaAIContent {
       // Setup page monitoring
       this.setupPageMonitoring();
       
+      // Setup message listeners for popup communication
+      this.setupMessageListeners();
+      
       // Add AI assistant panel to Eruda
       this.addAIAssistantPanel();
       
       console.log('Eruda AI Assistant initialized');
     } catch (error) {
       console.error('Failed to initialize Eruda AI Assistant:', error);
+    }
+  }
+
+  async initializeFloatingButton() {
+    try {
+      // Load floating button script
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL('eruda-floating-button.js');
+      script.onload = () => {
+        console.log('✅ Eruda floating button script loaded successfully');
+      };
+      script.onerror = (error) => {
+        console.error('❌ Failed to load floating button script:', error);
+      };
+      document.head.appendChild(script);
+      
+      console.log('[Eruda AI] Floating button initialization started');
+    } catch (error) {
+      console.error('[Eruda AI] Failed to initialize floating button:', error);
+    }
+  }
+
+  setupMessageListeners() {
+    // Listen for messages from popup
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      switch (message.type) {
+        case 'OPEN_ERUDA_PANEL':
+          this.openErudaPanel();
+          sendResponse({ success: true });
+          break;
+        case 'TOGGLE_ERUDA':
+          this.toggleEruda();
+          sendResponse({ success: true });
+          break;
+        case 'GET_PAGE_INFO':
+          sendResponse({
+            url: window.location.href,
+            title: document.title,
+            erudaLoaded: this.isErudaLoaded
+          });
+          break;
+        default:
+          sendResponse({ error: 'Unknown message type' });
+      }
+      return true; // Keep message channel open for async response
+    });
+  }
+
+  openErudaPanel() {
+    if (window.floatingErudaButton) {
+      window.floatingErudaButton.toggleEruda();
+    } else if (window.eruda) {
+      window.eruda.show();
+    }
+  }
+
+  toggleEruda() {
+    if (window.floatingErudaButton) {
+      window.floatingErudaButton.toggleEruda();
+    } else if (window.eruda) {
+      if (window.eruda._devTools && window.eruda._devTools.get('container').style.display === 'none') {
+        window.eruda.show();
+      } else {
+        window.eruda.hide();
+      }
     }
   }
 
