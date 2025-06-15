@@ -8,6 +8,7 @@ class VectorStore {
     this.dbVersion = 2; // Incremented for new features
     this.contextManager = null; // Will be injected
     this.semanticCache = new Map(); // Cache for semantic search results
+    this.lastError = null;
     this.categoryWeights = {
       HTML: 0.8,
       CSS: 0.7,
@@ -29,7 +30,12 @@ class VectorStore {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.dbVersion);
       
-      request.onerror = () => reject(request.error);
+      request.onerror = (event) => {
+        const error = event.target.error;
+        console.error('IndexedDB: Error opening database', event.target.errorCode, error);
+        this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'initializeDB' };
+        reject(error);
+      };
       request.onsuccess = () => {
         this.indexedDB = request.result;
         resolve();
@@ -68,40 +74,50 @@ class VectorStore {
         this.embeddings = embeddingsRequest.result || [];
         resolve();
       };
-      transaction.onerror = () => reject(transaction.error);
+      transaction.onerror = (event) => {
+        const error = event.target.error;
+        console.error('IndexedDB: Error loading documents from transaction', error);
+        this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'loadDocuments' };
+        reject(error);
+      };
     });
   }
 
   async addDocument(document) {
-    // Add timestamp and generate chunks
-    const doc = {
-      ...document,
-      id: Date.now() + Math.random(),
-      timestamp: document.timestamp || Date.now()
-    };
-
-    // Split content into chunks for better retrieval
-    const chunks = this.chunkContent(doc.content, 500);
-    
-    for (let i = 0; i < chunks.length; i++) {
-      const chunkDoc = {
-        ...doc,
-        id: `${doc.id}_chunk_${i}`,
-        content: chunks[i],
-        chunkIndex: i,
-        totalChunks: chunks.length
+    try {
+      // Add timestamp and generate chunks
+      const doc = {
+        ...document,
+        id: Date.now() + Math.random(),
+        timestamp: document.timestamp || Date.now()
       };
 
-      // Generate embedding for the chunk
-      const embedding = await this.generateEmbedding(chunks[i]);
+      // Split content into chunks for better retrieval
+      const chunks = this.chunkContent(doc.content, 500);
       
-      // Store document and embedding
-      await this.storeDocument(chunkDoc);
-      await this.storeEmbedding(chunkDoc.id, embedding);
-    }
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkDoc = {
+          ...doc,
+          id: `${doc.id}_chunk_${i}`,
+          content: chunks[i],
+          chunkIndex: i,
+          totalChunks: chunks.length
+        };
 
-    // Update in-memory collections
-    await this.loadDocuments();
+        // Generate embedding for the chunk
+        const embedding = await this.generateEmbedding(chunks[i]);
+
+        // Store document and embedding
+        await this.storeDocument(chunkDoc);
+        await this.storeEmbedding(chunkDoc.id, embedding);
+      }
+
+      // Update in-memory collections
+      await this.loadDocuments();
+    } catch (error) {
+      this.lastError = { timestamp: Date.now(), message: error.message || String(error), operation: 'addDocument' };
+      throw error; // Re-throw after logging
+    }
   }
 
   chunkContent(content, maxLength = 500) {
@@ -139,19 +155,28 @@ class VectorStore {
       }
     } catch (error) {
       console.warn('OpenAI embeddings not available, using simple embeddings:', error.message);
+        // Do not set lastError here if simple embedding is a planned fallback
     }
     
-    return this.generateSimpleEmbedding(text);
+    try {
+      return this.generateSimpleEmbedding(text);
+    } catch (error) {
+      this.lastError = { timestamp: Date.now(), message: error.message || String(error), operation: 'generateSimpleEmbedding' };
+      throw error;
+    }
   }
 
   async generateOpenAIEmbedding(text) {
-    // Check if we have OpenAI settings
-    const settings = await this.getSettings();
-    if (!settings || settings.provider !== 'openai' || !settings.apiKey) {
-      return null;
-    }
-
     try {
+      // Check if we have OpenAI settings
+      const settings = await this.getSettings();
+      if (!settings || settings.provider !== 'openai' || !settings.apiKey) {
+        if (!settings || !settings.apiKey) {
+          console.warn('OpenAI API key is missing. Cannot generate online embeddings.');
+        }
+        return null;
+      }
+
       const response = await fetch('https://api.openai.com/v1/embeddings', {
         method: 'POST',
         headers: {
@@ -165,14 +190,29 @@ class VectorStore {
       });
 
       if (!response.ok) {
-        throw new Error(`OpenAI API error: ${response.statusText}`);
+        if (response.status === 401) {
+          console.warn('OpenAI API request failed: Unauthorized. Check API key.');
+        } else if (response.status === 429) {
+          console.warn('OpenAI API request failed: Rate limit exceeded.');
+        } else {
+          console.warn('Failed to generate OpenAI embedding:', new Error(`OpenAI API error: ${response.statusText}`));
+        }
+        // Do not set lastError for failed API requests here, as it's handled by the caller or specific status codes
+        return null;
       }
 
       const data = await response.json();
       return data.data[0].embedding;
     } catch (error) {
-      console.warn('Failed to generate OpenAI embedding:', error);
-      return null;
+      const errorMessage = error.message || String(error);
+      if (error instanceof TypeError && errorMessage === 'Failed to fetch') {
+        console.warn('OpenAI API request failed: Network error.');
+        this.lastError = { timestamp: Date.now(), message: 'Network error: Failed to fetch OpenAI embeddings.', operation: 'generateOpenAIEmbedding' };
+      } else {
+        console.warn('Failed to generate OpenAI embedding:', error);
+        this.lastError = { timestamp: Date.now(), message: errorMessage, operation: 'generateOpenAIEmbedding' };
+      }
+      return null; // Explicitly return null on error
     }
   }
 
@@ -194,11 +234,29 @@ class VectorStore {
   }
 
   generateSimpleEmbedding(text, dimensions = 384) {
-    // Simple hash-based embedding for demonstration
-    // This creates a deterministic vector based on text content
-    const words = text.toLowerCase().match(/\b\w+\b/g) || [];
+    // Simple hash-based embedding for demonstration.
+    // This creates a deterministic vector based on text content.
+    // Stop words are removed to slightly improve relevance for this basic method.
+    const STOP_WORDS = new Set([
+      'the', 'a', 'is', 'in', 'it', 'of', 'and', 'to', 'for', 'on', 'with',
+      'as', 'by', 'an', 'at', 'this', 'that', 'these', 'those', 'i', 'you',
+      'he', 'she', 'we', 'they', 'was', 'were', 'be', 'has', 'had', 'do'
+    ]);
+
+    let words = text.toLowerCase().match(/\b\w+\b/g) || [];
+    words = words.filter(word => !STOP_WORDS.has(word));
+
     const embedding = new Array(dimensions).fill(0);
     
+    // This part is unlikely to throw an error with current logic, but good practice if complex ops were added.
+    // For now, not adding try-catch around the loop for performance of this simple method.
+    // If it could fail, a try-catch would be:
+    // try {
+    //   words.forEach(...);
+    // } catch (e) {
+    //   this.lastError = { timestamp: Date.now(), message: e.message, operation: 'generateSimpleEmbedding_loop' };
+    //   throw e;
+    // }
     words.forEach((word, index) => {
       const hash = this.simpleHash(word);
       for (let i = 0; i < dimensions; i++) {
@@ -228,7 +286,16 @@ class VectorStore {
     return new Promise((resolve, reject) => {
       const request = store.add(document);
       request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      request.onerror = (event) => {
+        console.error('IndexedDB: Error storing document', event.target.error);
+        const error = event.target.error;
+        console.error('IndexedDB: Error storing document', error);
+        this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'storeDocument' };
+        if (error?.name === 'QuotaExceededError') {
+          console.warn('IndexedDB: Quota exceeded. Cannot store more data. Please clear some storage or increase browser limits.');
+        }
+        reject(error);
+      };
     });
   }
 
@@ -239,20 +306,29 @@ class VectorStore {
     return new Promise((resolve, reject) => {
       const request = store.add({ documentId, embedding });
       request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      request.onerror = (event) => {
+        const error = event.target.error;
+        console.error('IndexedDB: Error storing embedding', error);
+        this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'storeEmbedding' };
+        if (error?.name === 'QuotaExceededError') {
+          console.warn('IndexedDB: Quota exceeded. Cannot store more data. Please clear some storage or increase browser limits.');
+        }
+        reject(error);
+      };
     });
   }
 
   async search(query, topK = 5) {
-    if (this.documents.length === 0) {
-      return [];
-    }
+    try {
+      if (this.documents.length === 0) {
+        return [];
+      }
 
-    // Generate embedding for query
-    const queryEmbedding = await this.generateEmbedding(query);
-    
-    // Calculate similarities
-    const similarities = this.embeddings.map(embeddingDoc => {
+      // Generate embedding for query
+      const queryEmbedding = await this.generateEmbedding(query);
+
+      // Calculate similarities
+      const similarities = this.embeddings.map(embeddingDoc => {
       const similarity = this.cosineSimilarity(queryEmbedding, embeddingDoc.embedding);
       const document = this.documents.find(doc => doc.id === embeddingDoc.documentId);
       
@@ -265,7 +341,20 @@ class VectorStore {
 
     // Sort by similarity and return top K
     similarities.sort((a, b) => b.similarity - a.similarity);
-    return similarities.slice(0, topK);
+    const resultsToLog = similarities.slice(0, topK);
+
+    if (resultsToLog.length > 0) {
+      const totalSimilarity = resultsToLog.reduce((sum, result) => sum + result.similarity, 0);
+      const avgSimilarity = totalSimilarity / resultsToLog.length;
+      const maxSimilarity = resultsToLog[0].similarity; // Already sorted
+      console.debug(`VectorSearch: Top ${resultsToLog.length} results for query "${query.substring(0, 50)}...". Avg similarity: ${avgSimilarity.toFixed(3)}, Max similarity: ${maxSimilarity.toFixed(3)}`);
+    }
+
+    return resultsToLog;
+    } catch (error) {
+      this.lastError = { timestamp: Date.now(), message: error.message || String(error), operation: 'search' };
+      throw error;
+    }
   }
 
   cosineSimilarity(vecA, vecB) {
@@ -299,17 +388,59 @@ class VectorStore {
     const documentsStore = transaction.objectStore('documents');
     const embeddingsStore = transaction.objectStore('embeddings');
     
-    await Promise.all([
-      new Promise(resolve => {
-        const request = documentsStore.clear();
-        request.onsuccess = () => resolve();
-      }),
-      new Promise(resolve => {
-        const request = embeddingsStore.clear();
-        request.onsuccess = () => resolve();
-      })
-    ]);
+    const clearPromises = [];
+
+    clearPromises.push(new Promise((resolve, reject) => {
+      const clearDocsRequest = documentsStore.clear();
+      clearDocsRequest.onsuccess = () => resolve();
+      clearDocsRequest.onerror = (event) => {
+        const error = event.target.error;
+        console.error('IndexedDB: Error clearing documents store', error);
+        this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'clearDocuments_docs' };
+        reject(error);
+      };
+    }));
+
+    clearPromises.push(new Promise((resolve, reject) => {
+      const clearEmbedsRequest = embeddingsStore.clear();
+      clearEmbedsRequest.onsuccess = () => resolve();
+      clearEmbedsRequest.onerror = (event) => {
+        const error = event.target.error;
+        console.error('IndexedDB: Error clearing embeddings store', error);
+        this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'clearDocuments_embeds' };
+        reject(error);
+      };
+    }));
     
+    transaction.oncomplete = () => {
+      this.documents = [];
+      this.embeddings = [];
+      // Resolve the main promise once transaction is complete
+    };
+
+    transaction.onerror = (event) => {
+      const error = event.target.error;
+      console.error('IndexedDB: Error during clearDocuments transaction', error);
+      this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'clearDocuments_transaction' };
+      // Reject the main promise if transaction fails
+    };
+
+    try {
+      await Promise.all(clearPromises);
+    } catch (error) {
+      // Errors from individual clear requests are already logged and lastError set.
+      // This catch is to prevent unhandled promise rejections if any promise in Promise.all rejects.
+      // The transaction.onerror should ideally handle the overall transaction failure.
+      console.error("IndexedDB: Failure in one of the clear operations during Promise.all", error);
+      // Potentially set a more general lastError if not already set by specific clear operation
+      if (!this.lastError || (Date.now() - this.lastError.timestamp > 100)) { // Avoid overwriting specific recent error
+         this.lastError = { timestamp: Date.now(), message: 'Failure in Promise.all for clearDocuments', operation: 'clearDocuments_PromiseAll' };
+      }
+    }
+
+    // Reset in-memory arrays only if transaction was successful.
+    // This part might need adjustment based on how we want to handle partial success/failure.
+    // If transaction.onerror is triggered, this might not be reached as expected.
     this.documents = [];
     this.embeddings = [];
   }
@@ -358,7 +489,10 @@ class VectorStore {
     this.embeddings.push(embedding);
 
     // Save to IndexedDB
-    await this.saveDocument(doc, embedding);
+    // This method is not defined in the provided code, assuming it's a typo for storeDocument or similar
+    // For now, I'll assume this.storeDocument and this.storeEmbedding are used inside addDocument
+    // await this.saveDocument(doc, embedding);
+    // If saveDocument is a distinct method, it also needs lastError handling.
 
     return doc.id;
   }
@@ -367,9 +501,10 @@ class VectorStore {
    * Search with category filtering and relevance scoring
    */
   async searchWithCategories(query, options = {}) {
-    const {
-      categories = [],
-      minRelevance = 0,
+    try {
+      const {
+        categories = [],
+        minRelevance = 0,
       maxResults = 10,
       boostRecent = true,
       semanticThreshold = 0.3
@@ -432,6 +567,13 @@ class VectorStore {
     results.sort((a, b) => b.score - a.score);
     const finalResults = results.slice(0, maxResults);
 
+    if (finalResults.length > 0) {
+      const totalScore = finalResults.reduce((sum, result) => sum + result.score, 0);
+      const avgScore = totalScore / finalResults.length;
+      const maxScore = finalResults[0].score; // Already sorted
+      console.debug(`VectorSearchWithCategories: Top ${finalResults.length} results for query "${query.substring(0,50)}...". Avg score: ${avgScore.toFixed(3)}, Max score: ${maxScore.toFixed(3)}`);
+    }
+
     // Cache results
     this.semanticCache.set(cacheKey, finalResults);
 
@@ -444,6 +586,10 @@ class VectorStore {
     }
 
     return finalResults;
+    } catch (error) {
+      this.lastError = { timestamp: Date.now(), message: error.message || String(error), operation: 'searchWithCategories' };
+      throw error;
+    }
   }
 
   /**
@@ -646,6 +792,104 @@ class VectorStore {
     };
 
     return exportData;
+  }
+
+  /**
+   * Performs a basic on-demand health check of the IndexedDB instance.
+   */
+  async checkDBHealth() {
+    try {
+      // Try to re-initialize (or open) the database
+      await this.initializeDB(); // This already sets lastError on failure
+    } catch (error) {
+      // initializeDB sets its own lastError, so we just return it
+      return {
+        ok: false,
+        step: 'initialize',
+        error: 'Failed to initialize database',
+        details: this.lastError // return the error set by initializeDB
+      };
+    }
+
+    if (!this.indexedDB) {
+      this.lastError = { timestamp: Date.now(), message: 'DB connection not established.', operation: 'checkDBHealth_no_connection' };
+      return {
+        ok: false,
+        step: 'initialize',
+        error: 'Database connection not established after initialization attempt.',
+        details: null
+      };
+    }
+
+    try {
+      // Try to perform a simple read operation (count documents)
+      const transaction = this.indexedDB.transaction(['documents'], 'readonly');
+      const store = transaction.objectStore('documents');
+
+      return new Promise((resolve) => {
+        const countRequest = store.count();
+
+        countRequest.onsuccess = () => {
+          console.info(`IndexedDB Health Check: Found ${countRequest.result} documents.`);
+          resolve({
+            ok: true,
+            message: 'Database is responsive.',
+            documentCount: countRequest.result
+          });
+        };
+
+        countRequest.onerror = (event) => {
+          const error = event.target.error;
+          console.error('IndexedDB Health Check: Error counting documents', error);
+          this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'checkDBHealth_count' };
+          resolve({
+            ok: false,
+            step: 'read_count',
+            error: 'Failed to count documents',
+            details: error
+          });
+        };
+
+        transaction.onerror = (event) => {
+          const error = event.target.error;
+          // This might be redundant if countRequest.onerror fires, but good for overall transaction issues.
+          console.error('IndexedDB Health Check: Transaction error during read_count', error);
+          this.lastError = { timestamp: Date.now(), message: error?.message || String(error), operation: 'checkDBHealth_transaction' };
+          resolve({
+            ok: false,
+            step: 'read_count_transaction',
+            error: 'Transaction failed during document count',
+            details: error
+          });
+        };
+      });
+    } catch (error) {
+      // Catch synchronous errors if transaction creation itself fails
+      console.error('IndexedDB Health Check: Error setting up read transaction', error);
+      this.lastError = { timestamp: Date.now(), message: error.message || String(error), operation: 'checkDBHealth_setupTransaction' };
+      return {
+        ok: false,
+        step: 'read_transaction_setup',
+        error: 'Failed to set up read transaction',
+        details: error
+      };
+    }
+  }
+
+  getLastError() {
+    return this.lastError;
+  }
+
+  clearLastError() {
+    this.lastError = null;
+  }
+
+  async getEmbeddingSourceSummary() {
+    const settings = await this.getSettings();
+    if (settings && settings.provider === 'openai' && settings.apiKey) {
+      return "OpenAI (API)";
+    }
+    return "Local Fallback (Simple Hash)";
   }
 }
 

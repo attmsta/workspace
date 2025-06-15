@@ -3,6 +3,53 @@ class BackgroundService {
   constructor() {
     this.setupEventListeners();
     this.networkRequests = new Map();
+    this.ragWorker = null;
+    this.ragWorkerRequests = {}; // To store promises for pending RAG worker requests
+    this.ragWorkerRequestId = 0; // Simple ID generator
+  }
+
+  initializeRAGWorkerIfNotReady() {
+    if (!this.ragWorker) {
+      console.log('Initializing RAG Worker...');
+      this.ragWorker = new Worker(chrome.runtime.getURL('rag-worker.js'));
+
+      this.ragWorker.onmessage = (event) => {
+        const { id, result } = event.data;
+        if (this.ragWorkerRequests[id]) {
+          this.ragWorkerRequests[id].resolve(result);
+          delete this.ragWorkerRequests[id];
+        } else {
+          console.warn('Received RAG worker message for unknown request ID:', id, result);
+        }
+      };
+
+      this.ragWorker.onerror = (error) => {
+        console.error('RAG Worker error:', error);
+        // Potentially reject all pending requests or handle errors more gracefully
+        Object.values(this.ragWorkerRequests).forEach(req => {
+            req.reject(new Error('RAG Worker global error: ' + error.message));
+        });
+        this.ragWorkerRequests = {};
+        this.ragWorker = null; // Consider re-initializing or marking as errored
+      };
+      // Initialize the worker itself
+      this.postMessageToRAGWorker({ method: 'initialize' })
+        .then(response => console.log('RAG Worker initialization response:', response))
+        .catch(error => console.error('Failed to send initialize message to RAG worker:', error));
+    }
+  }
+
+  postMessageToRAGWorker(messagePayload) {
+    this.initializeRAGWorkerIfNotReady();
+
+    const uniqueId = `ragReq_${this.ragWorkerRequestId++}`;
+
+    const promise = new Promise((resolve, reject) => {
+      this.ragWorkerRequests[uniqueId] = { resolve, reject };
+    });
+
+    this.ragWorker.postMessage({ id: uniqueId, ...messagePayload });
+    return promise;
   }
 
   setupEventListeners() {
@@ -88,6 +135,38 @@ class BackgroundService {
           sendResponse({ success: true });
           break;
 
+        case 'CHECK_EMBEDDING_SERVICE_STATUS':
+          const status = await this.checkEmbeddingServiceStatus();
+          sendResponse({ success: true, data: status });
+          break;
+
+        case 'GET_RAG_WORKER_STATISTICS':
+          try {
+            const stats = await this.postMessageToRAGWorker({ method: 'getStatistics' });
+            sendResponse({ success: true, data: stats });
+          } catch (e) {
+            sendResponse({ success: false, error: e.message });
+          }
+          break;
+
+        case 'GET_RAG_WORKER_LAST_ERROR':
+          try {
+            const lastError = await this.postMessageToRAGWorker({ method: 'getLastError' });
+            sendResponse({ success: true, data: lastError });
+          } catch (e) {
+            sendResponse({ success: false, error: e.message });
+          }
+          break;
+
+        case 'CLEAR_RAG_WORKER_LAST_ERROR':
+          try {
+            await this.postMessageToRAGWorker({ method: 'clearLastError' });
+            sendResponse({ success: true });
+          } catch (e) {
+            sendResponse({ success: false, error: e.message });
+          }
+          break;
+
         default:
           sendResponse({ success: false, error: 'Unknown message type' });
       }
@@ -134,23 +213,36 @@ class BackgroundService {
     const { provider, apiKey, model } = settings;
 
     if (!apiKey) {
-      throw new Error('API key not configured');
+      throw new Error('API key is missing. Please configure it in the extension settings.');
     }
 
     const requestConfig = await this.buildAIRequestConfig(provider, model, payload);
     
-    const response = await fetch(requestConfig.url, {
-      method: 'POST',
-      headers: requestConfig.headers,
-      body: JSON.stringify(requestConfig.body)
-    });
+    try {
+      const response = await fetch(requestConfig.url, {
+        method: 'POST',
+        headers: requestConfig.headers,
+        body: JSON.stringify(requestConfig.body)
+      });
 
-    if (!response.ok) {
-      throw new Error(`AI API request failed: ${response.statusText}`);
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('AI API request failed: Unauthorized. Please check your API key.');
+        } else if (response.status === 429) {
+          throw new Error('AI API request failed: Rate limit exceeded. Please try again later.');
+        } else {
+          throw new Error(`AI API request failed: ${response.statusText}`);
+        }
+      }
+
+      const data = await response.json();
+      return this.parseAIResponse(provider, data);
+    } catch (error) {
+      if (error instanceof TypeError && error.message === 'Failed to fetch') {
+        throw new Error('AI API request failed: Network error. Please check your internet connection.');
+      }
+      throw error; // Re-throw other errors
     }
-
-    const data = await response.json();
-    return this.parseAIResponse(provider, data);
   }
 
   async buildAIRequestConfig(provider, model, payload) {
@@ -374,6 +466,47 @@ class BackgroundService {
     } catch (error) {
       console.error('Failed to get context stats:', error);
       throw error;
+    }
+  }
+
+  async checkEmbeddingServiceStatus() {
+    const settings = await this.getSettings();
+    const { provider, apiKey, ragEnabled } = settings;
+
+    if (!ragEnabled) {
+      return { status: 'info', message: 'RAG Disabled' };
+    }
+
+    if (!apiKey) {
+      return { status: 'error', message: 'API key missing' };
+    }
+
+    if (provider === 'openai') {
+      try {
+        const response = await fetch('https://api.openai.com/v1/models', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+          },
+        });
+
+        if (response.ok) {
+          return { status: 'ok', message: 'OpenAI Connected' };
+        } else if (response.status === 401) {
+          return { status: 'error', message: 'OpenAI Connection Failed: Invalid API Key' };
+        } else {
+          return { status: 'error', message: `OpenAI Connection Failed: ${response.statusText}` };
+        }
+      } catch (error) {
+        if (error instanceof TypeError && error.message === 'Failed to fetch') {
+          return { status: 'error', message: 'OpenAI Connection Failed: Network Error' };
+        }
+        console.error('OpenAI status check error:', error);
+        return { status: 'error', message: 'OpenAI Connection Failed' };
+      }
+    } else {
+      // For other providers, just check API key presence
+      return { status: 'ok', message: 'Provider API Key Present' };
     }
   }
 }

@@ -531,6 +531,7 @@ class ErudaAIContent {
               📈 Performance
             </button>
             <button class="ai-settings-btn" title="Settings">⚙️</button>
+            <span id="embedding-status-indicator" title="Embedding Service Status"></span>
           </div>
         </div>
         
@@ -568,17 +569,211 @@ class ErudaAIContent {
             </div>
           </div>
         </div>
+
+        <div id="rag-diagnostics-section">
+          <h4>RAG System Diagnostics</h4>
+          <p>Embedding Method: <span id="diag-embedding-method">-</span></p>
+          <p>VectorStore Docs (Chunks): <span id="diag-vector-docs">-</span></p>
+          <p>VectorStore Last Error: <pre id="diag-vector-last-error" class="diag-pre">-</pre></p>
+          <hr>
+          <p>RAG Worker Docs: <span id="diag-rag-docs">-</span></p>
+          <p>RAG Worker Status: <span id="diag-rag-status">-</span></p>
+          <p>RAG Worker Last Error: <pre id="diag-rag-last-error" class="diag-pre">-</pre></p>
+          <button id="refresh-rag-diagnostics" class="diag-button">Refresh Diagnostics</button>
+          <hr>
+          <h4>Test RAG Process (VectorStore)</h4>
+          <div class="rag-test-controls">
+              <input type="text" id="rag-test-query-input" placeholder="Enter test query">
+              <button id="rag-test-query-button" class="diag-button">Test Search</button>
+          </div>
+          <div id="rag-test-results-output">
+              <p><em>Enter a query and click "Test Search" to see results from VectorStore.</em></p>
+          </div>
+        </div>
       </div>
     `;
 
     $container.html(html);
-    this.setupAIEventListeners($container);
-    this.loadAIStyles();
+    this.setupAIEventListeners($container); // Call this after HTML is set
+    this.loadAIStyles(); // Call this after HTML is set
     this.updateContextCount();
     this.generateSmartQuickActions();
+    this.updateEmbeddingStatusIndicator(); // For the status indicator in header
+    this.updateRagDiagnostics(); // Initial call for diagnostics section
     
     // Check if this is the first time using the extension
     this.checkFirstTimeUser();
+
+    // Set up listeners specific to the RAG diagnostics and test UI
+    // Note: setupAIEventListeners already handles some general buttons, this is for specific ones.
+    const $refreshDiagnosticsBtn = $container.find('#refresh-rag-diagnostics');
+    if ($refreshDiagnosticsBtn.length) {
+        $refreshDiagnosticsBtn.on('click', () => this.updateRagDiagnostics());
+    }
+
+    const $ragTestQueryButton = $container.find('#rag-test-query-button');
+    if ($ragTestQueryButton.length) {
+        this.setupRagTestListener($ragTestQueryButton);
+    }
+  }
+
+  async updateRagDiagnostics() {
+    if (!this.ragSystem) {
+      console.warn("RAG Diagnostics: VectorStore (this.ragSystem) not available.");
+      $('#diag-embedding-method, #diag-vector-docs, #diag-vector-last-error, #diag-rag-docs, #diag-rag-status, #diag-rag-last-error').text('-');
+      return;
+    }
+
+    try {
+      // VectorStore related diagnostics
+      if (typeof this.ragSystem.getEmbeddingSourceSummary === 'function') {
+        const embeddingMethod = await this.ragSystem.getEmbeddingSourceSummary();
+        $('#diag-embedding-method').text(embeddingMethod || '-');
+      } else {
+        $('#diag-embedding-method').text('Not available');
+      }
+
+      if (typeof this.ragSystem.getDocumentCount === 'function') {
+        const vectorDocsCount = await this.ragSystem.getDocumentCount();
+        $('#diag-vector-docs').text(vectorDocsCount !== null ? String(vectorDocsCount) : '-');
+      } else {
+        $('#diag-vector-docs').text('Not available');
+      }
+
+      if (typeof this.ragSystem.getLastError === 'function') {
+        const vectorStoreLastError = this.ragSystem.getLastError();
+        if (vectorStoreLastError) {
+          $('#diag-vector-last-error').text(
+            `Timestamp: ${new Date(vectorStoreLastError.timestamp).toLocaleString()}\nOperation: ${vectorStoreLastError.operation}\nMessage: ${vectorStoreLastError.message}`
+          );
+          if (typeof this.ragSystem.clearLastError === 'function') {
+            this.ragSystem.clearLastError();
+          }
+        } else {
+          $('#diag-vector-last-error').text('None');
+        }
+      } else {
+         $('#diag-vector-last-error').text('Not available');
+      }
+
+      // RAG Worker related diagnostics
+      chrome.runtime.sendMessage({ type: 'GET_RAG_WORKER_STATISTICS' }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('Error fetching RAG worker stats:', chrome.runtime.lastError.message);
+          $('#diag-rag-docs').text('Error');
+          $('#diag-rag-status').text('Error');
+          return;
+        }
+        if (response && response.success && response.data) {
+          $('#diag-rag-docs').text(response.data.totalDocuments !== null ? String(response.data.totalDocuments) : '-');
+          let statusText = response.data.isInitialized ? 'Initialized' : 'Not Initialized';
+          if(response.data.isInitialized) {
+            statusText += response.data.hasVectorStore ? ' (VectorStore Ready)' : ' (No VectorStore)';
+          }
+          $('#diag-rag-status').text(statusText);
+
+          if (response.data.lastError) {
+            const ragError = response.data.lastError;
+            $('#diag-rag-last-error').text(
+              `Timestamp: ${new Date(ragError.timestamp).toLocaleString()}\nOperation: ${ragError.operation}\nMessage: ${ragError.message}`
+            );
+            chrome.runtime.sendMessage({ type: 'CLEAR_RAG_WORKER_LAST_ERROR' });
+          } else {
+            chrome.runtime.sendMessage({ type: 'GET_RAG_WORKER_LAST_ERROR' }, (errResponse) => {
+              if (chrome.runtime.lastError) {
+                $('#diag-rag-last-error').text('Error fetching error'); return;
+              }
+              if (errResponse && errResponse.success && errResponse.data) {
+                const ragErrorData = errResponse.data;
+                 $('#diag-rag-last-error').text(
+                  `Timestamp: ${new Date(ragErrorData.timestamp).toLocaleString()}\nOperation: ${ragErrorData.operation}\nMessage: ${ragErrorData.message}`
+                );
+                chrome.runtime.sendMessage({ type: 'CLEAR_RAG_WORKER_LAST_ERROR' });
+              } else if (errResponse && !errResponse.data) {
+                 $('#diag-rag-last-error').text('None');
+              } else {
+                 $('#diag-rag-last-error').text(errResponse?.error || 'Failed to get error');
+              }
+            });
+          }
+        } else {
+          $('#diag-rag-docs').text(response?.error || 'Failed');
+          $('#diag-rag-status').text(response?.error || 'Failed');
+          $('#diag-rag-last-error').text(response?.error || 'Failed to get stats');
+        }
+      });
+    } catch (error) {
+      console.error("Error updating RAG diagnostics (VectorStore part):", error);
+      $('#diag-embedding-method').text('Error');
+      $('#diag-vector-docs').text('Error');
+      $('#diag-vector-last-error').text(`Error: ${error.message}`);
+    }
+  }
+
+  async updateEmbeddingStatusIndicator() {
+    const indicator = $('#embedding-status-indicator');
+    if (!indicator.length) return;
+
+    indicator.text('Checking...').removeClass('status-ok status-error status-info');
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'CHECK_EMBEDDING_SERVICE_STATUS' });
+      if (response && response.success && response.data) {
+        indicator.text(response.data.message);
+        if (response.data.status === 'ok') {
+          indicator.addClass('status-ok');
+        } else if (response.data.status === 'error') {
+          indicator.addClass('status-error');
+        } else if (response.data.status === 'info') {
+          indicator.addClass('status-info');
+        }
+      } else {
+        indicator.text('Status Error').addClass('status-error');
+      }
+    } catch (error) {
+      console.error('Failed to check embedding status:', error);
+      indicator.text('Status Error').addClass('status-error');
+    }
+  }
+
+  async setupRagTestListener($button) {
+    if (!$button || !$button.length) return;
+    $button.on('click', async () => {
+      const query = $('#rag-test-query-input').val().trim();
+      const $resultsOutput = $('#rag-test-results-output');
+
+      if (!query) {
+        $resultsOutput.html('<p><em>Please enter a query.</em></p>');
+        return;
+      }
+
+      $resultsOutput.html('<p><em>Processing...</em></p>');
+
+      if (!this.ragSystem || typeof this.ragSystem.search !== 'function') {
+        $resultsOutput.html('<p><em>Error: RAG System (VectorStore) or search method not available.</em></p>');
+        return;
+      }
+
+      try {
+        let outputHtml = '';
+        const searchResults = await this.ragSystem.search(query, 3);
+
+        if (searchResults && searchResults.length > 0) {
+          outputHtml += searchResults.map(result => `
+            <div class="rag-test-result-item">
+              <p class="rag-test-result-meta"><strong>ID:</strong> ${result.document?.id || 'N/A'} | <strong>Similarity:</strong> ${result.similarity?.toFixed(4) || 'N/A'}</p>
+              <p class="rag-test-result-content"><em>Content:</em> ${(result.document?.content || 'N/A').substring(0, 200)}...</p>
+            </div>
+          `).join('');
+          $resultsOutput.html(outputHtml);
+        } else {
+           $resultsOutput.html('<p><em>No results found.</em></p>');
+        }
+      } catch (error) {
+        console.error("Error during RAG test search:", error);
+        $resultsOutput.html(`<p><em>Error during search: ${error.message}</em></p>`);
+      }
+    });
   }
 
   setupAIEventListeners($container) {
@@ -618,6 +813,11 @@ class ErudaAIContent {
     $contextVizBtn.on('click', () => this.showContextVisualization());
     $helpBtn.on('click', () => this.showHelp());
     $performanceBtn.on('click', () => this.showPerformanceDashboard());
+
+    const $statusIndicator = $container.find('#embedding-status-indicator');
+    if ($statusIndicator.length) { // Ensure element exists before attaching listener
+        $statusIndicator.on('click', () => this.updateEmbeddingStatusIndicator());
+    }
   }
 
   async sendMessage() {
@@ -2460,6 +2660,123 @@ ${contextSummary}`;
         
         .ai-send-btn:hover {
           background: #0056b3;
+        }
+
+        #embedding-status-indicator {
+          padding: 4px 8px;
+          border-radius: 4px;
+          margin-left: 8px;
+          font-size: 12px;
+          cursor: pointer;
+        }
+
+        .status-ok {
+          background-color: #28a745; /* Green */
+          color: white;
+        }
+
+        .status-error {
+          background-color: #dc3545; /* Red */
+          color: white;
+        }
+
+        .status-info {
+          background-color: #ffc107; /* Orange */
+          color: black;
+        }
+
+        #rag-diagnostics-section {
+          padding: 10px;
+          border-top: 1px solid #e0e0e0;
+          background: #f9f9f9;
+          font-size: 12px;
+          color: #333;
+        }
+        #rag-diagnostics-section h4 {
+          font-size: 14px;
+          margin-top: 10px;
+          margin-bottom: 8px;
+          color: #111;
+        }
+        #rag-diagnostics-section p {
+          margin: 4px 0;
+        }
+        #rag-diagnostics-section span,
+        #rag-diagnostics-section pre {
+          font-weight: bold;
+          color: #007bff;
+        }
+        .diag-pre {
+          white-space: pre-wrap;
+          word-break: break-all;
+          background-color: #e9ecef;
+          padding: 8px;
+          border-radius: 4px;
+          max-height: 100px;
+          overflow-y: auto;
+          font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          font-size: 11px;
+          color: #333;
+        }
+        .diag-button {
+          background-color: #6c757d;
+          color: white;
+          border: none;
+          padding: 6px 12px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 12px;
+          margin-top: 8px;
+        }
+        .diag-button:hover {
+          background-color: #5a6268;
+        }
+
+        .rag-test-controls {
+            display: flex;
+            margin-bottom: 8px;
+        }
+
+        #rag-test-query-input {
+          flex-grow: 1;
+          padding: 6px 8px;
+          border: 1px solid #ced4da;
+          border-radius: 4px;
+          margin-right: 5px;
+          box-sizing: border-box;
+          font-size: 12px;
+        }
+
+        #rag-test-results-output {
+          margin-top: 10px;
+          max-height: 150px;
+          overflow-y: auto;
+          border: 1px solid #dee2e6;
+          padding: 8px;
+          background: #fff;
+          font-size: 11px;
+          border-radius: 4px;
+        }
+        #rag-test-results-output p {
+          margin: 5px 0;
+        }
+        .rag-test-result-item {
+          border: 1px solid #f1f3f4;
+          padding: 8px;
+          margin-bottom: 8px;
+          background: #f8f9fa;
+          border-radius: 3px;
+        }
+        .rag-test-result-meta {
+          margin: 0 0 4px 0;
+          font-weight: bold;
+          font-size: 10px;
+          color: #495057;
+        }
+        .rag-test-result-content {
+          margin: 0;
+          font-style: italic;
+          color: #212529;
         }
         
         @keyframes typing {

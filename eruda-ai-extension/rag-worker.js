@@ -6,9 +6,11 @@
 class RAGWorker {
   constructor() {
     this.vectorStore = null;
+    this.vectorStore = null;
     this.isInitialized = false;
     this.documents = new Map();
     this.categories = new Set();
+    this.lastError = null;
   }
 
   /**
@@ -25,8 +27,9 @@ class RAGWorker {
       this.isInitialized = true;
       return { success: true, message: 'RAG Worker initialized successfully' };
     } catch (error) {
+      this.lastError = { timestamp: Date.now(), message: error.message || String(error), operation: 'initialize' };
       console.error('RAG Worker initialization failed:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, lastError: this.lastError };
     }
   }
 
@@ -61,8 +64,10 @@ class RAGWorker {
         message: 'Document added successfully' 
       };
     } catch (error) {
+      this.lastError = { timestamp: Date.now(), message: error.message || String(error), operation: 'addDocument' };
       console.error('Failed to add document:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, lastError: this.lastError };
+      return { success: false, error: error.message, lastError: this.lastError };
     }
   }
 
@@ -122,13 +127,24 @@ class RAGWorker {
    * Get document statistics
    */
   getStatistics() {
+    // This method is synchronous and less likely to have errors itself,
+    // but could be called when the state is inconsistent if other operations failed.
     return {
       totalDocuments: this.documents.size,
       categories: Array.from(this.categories),
       categoryCount: this.categories.size,
       isInitialized: this.isInitialized,
-      hasVectorStore: !!this.vectorStore
+      hasVectorStore: !!this.vectorStore,
+      lastError: this.lastError // Include lastError in stats for diagnostics
     };
+  }
+
+  getLastError() {
+    return this.lastError;
+  }
+
+  clearLastError() {
+    this.lastError = null;
   }
 
   /**
@@ -177,7 +193,8 @@ class RAGWorker {
       };
     } catch (error) {
       console.error('Cleanup failed:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, lastError: this.lastError };
+      return { success: false, error: error.message, lastError: this.lastError };
     }
   }
 
@@ -246,35 +263,42 @@ class RAGWorker {
     if (typeof text !== 'string') return '';
     return text
       .replace(/\s+/g, ' ')
-      .replace(/[^\w\s\-_.]/g, ' ')
+      .replace(/[^\w\s\-_.]/g, ' ') // Keep hyphens, underscores, periods
       .trim()
       .toLowerCase();
+  }
+
+  escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
   }
 
   simpleTextSearch(query, options = {}) {
     const { limit = 5, category = null } = options;
     const queryTerms = this.cleanText(query).split(' ').filter(term => term.length > 2);
     
+    if (queryTerms.length === 0) {
+      return [];
+    }
+
     const results = [];
     
     for (const [id, doc] of this.documents.entries()) {
       if (category && doc.category !== category) continue;
       
-      const content = `${doc.title} ${doc.content}`.toLowerCase();
+      const title = typeof doc.title === 'string' ? doc.title : '';
+      const content = typeof doc.content === 'string' ? doc.content : '';
+      const searchableText = `${title} ${content}`.toLowerCase();
       let score = 0;
       
       queryTerms.forEach(term => {
-        const matches = (content.match(new RegExp(term, 'g')) || []).length;
+        const matches = (searchableText.match(new RegExp(this.escapeRegExp(term), 'g')) || []).length;
         score += matches;
       });
       
       if (score > 0) {
         results.push({
-          id,
-          content: doc.content,
-          title: doc.title,
-          score: score / queryTerms.length,
-          category: doc.category
+          ...doc, // Spread the properties of the processed document
+          score: score / queryTerms.length, // Normalization by number of query terms
         });
       }
     }
@@ -305,6 +329,8 @@ if (typeof self !== 'undefined' && self.postMessage) {
   self.onmessage = async function(e) {
     const { id, method, params } = e.data;
     
+    ragWorker.clearLastError(); // Clear last error before new operation
+
     try {
       let result;
       
@@ -319,13 +345,16 @@ if (typeof self !== 'undefined' && self.postMessage) {
           result = await ragWorker.search(params.query, params.options);
           break;
         case 'getStatistics':
-          result = ragWorker.getStatistics();
+          result = ragWorker.getStatistics(); // Synchronous
+          break;
+        case 'getLastError':
+          result = ragWorker.getLastError(); // Synchronous
           break;
         case 'cleanup':
           result = await ragWorker.cleanup(params.options);
           break;
         case 'exportData':
-          result = ragWorker.exportData();
+          result = ragWorker.exportData(); // Synchronous
           break;
         case 'importData':
           result = await ragWorker.importData(params.data);
@@ -334,11 +363,21 @@ if (typeof self !== 'undefined' && self.postMessage) {
           result = { success: false, error: `Unknown method: ${method}` };
       }
       
+      // If an async operation failed and set lastError, include it in the response
+      if (result && result.success === false && ragWorker.getLastError()) {
+        result.lastError = ragWorker.getLastError();
+      }
       self.postMessage({ id, result });
+
     } catch (error) {
+      // This catch is for unexpected errors in the message handler itself,
+      // or if a synchronous method above throws.
+      // Async methods should handle their own errors and set lastError.
+      const internalError = { timestamp: Date.now(), message: error.message || String(error), operation: `worker_onmessage_${method}` };
+      ragWorker.lastError = internalError; // Set it as it's an unhandled one
       self.postMessage({ 
         id, 
-        result: { success: false, error: error.message } 
+        result: { success: false, error: error.message, lastError: internalError }
       });
     }
   };
